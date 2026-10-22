@@ -475,18 +475,21 @@ cmd=function(t){const s=N(t),n=(s.match(/(\d+(?:[.,]\d+)?)/)||[])[1],v=n?num(n):
  if(target)goTo(target)};
 /* ===== Version autonome : écoute en continu + gestes de la main ===== */
 let REC=null,wantListen=false,speakingUntil=0,awakeUntil=0,hOn=false,HL=null,hv=null,hLast=-1,hPrevX=null,hRatio=null,hSeen=false,wl=null;
-const WAKE=/(ul|hul|el|al)tr[oa]n/;
+const WAKE=/(ul|hul|vol|oul|el|al|hult)\s?tr[oau]n?e?s?|ultra\s?on|ultra/;
+let mode=1;
 const _say=say;say=function(m){speakingUntil=Date.now()+1200+String(m).length*75;_say(m)};
-function vstat(m){const e=document.getElementById('vst');if(!e)return;e.textContent=m||(!wantListen?'Micro coupé':Date.now()<awakeUntil?'Éveillé':'Dis « Ultron »');e.className=wantListen?(Date.now()<awakeUntil?'on':'lis'):''}
+function vstat(m){const e=document.getElementById('vst');if(!e)return;e.textContent=m||(!wantListen?'Micro coupé':mode===2?'Toujours à l’écoute':Date.now()<awakeUntil?'Éveillé':'Dis « Ultron »');e.className=wantListen?(mode===2||Date.now()<awakeUntil?'on':'lis'):''}
+function seen(t,fin){cap((fin?'J’entends : ':'… ')+t);clearTimeout(ct);ct=setTimeout(()=>cap(''),4500)}
 function heard(t){const now=Date.now();if(now<speakingUntil)return;const s=N(t),m=s.match(WAKE);
  if(m){awakeUntil=now+30000;vstat();const rest=t.slice(m.index+m[0].length).replace(/^[\s,.:!?;-]+/,'').trim();if(rest.length>1){cap('« '+rest+' »');cmd(rest)}else say('Oui ?');return}
- if(now<awakeUntil){awakeUntil=now+30000;vstat();cap('« '+t+' »');cmd(t)}}
-function startRec(){if(!SR||REC||!wantListen)return;const r=new SR();r.lang='fr-FR';r.continuous=true;r.interimResults=false;r.maxAlternatives=1;
- r.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){if(!e.results[i].isFinal)continue;const t=e.results[i][0].transcript.trim();if(t)heard(t)}};
+ if(mode===2||now<awakeUntil){awakeUntil=now+30000;vstat();cap('« '+t+' »');cmd(t);return}
+ seen(t,true)}
+function startRec(){if(!SR||REC||!wantListen)return;const r=new SR();r.lang='fr-FR';r.continuous=true;r.interimResults=true;r.maxAlternatives=1;
+ r.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript.trim();if(!t)continue;if(e.results[i].isFinal)heard(t);else if(Date.now()>=speakingUntil)seen(t,false)}};
  r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){wantListen=false;vstat('Micro refusé')}};
  r.onend=()=>{REC=null;if(wantListen)setTimeout(startRec,350)};
  try{r.start();REC=r;vstat()}catch(x){REC=null}}
-function toggleMic(){if(wantListen){wantListen=false;try{REC&&REC.stop()}catch(e){}vstat()}else{wantListen=true;startRec();vstat()}}
+function toggleMic(){if(!wantListen){wantListen=true;mode=1;startRec()}else if(mode===1){mode=2}else{wantListen=false;try{REC&&REC.stop()}catch(e){}}vstat()}
 setInterval(()=>vstat(),2000);
 /* Gestes : la distance pouce-index règle la taille, le mouvement de la main fait tourner */
 async function handsStart(){

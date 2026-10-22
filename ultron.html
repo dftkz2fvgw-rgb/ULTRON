@@ -516,9 +516,92 @@ function boot(withCam){try{speechSynthesis.speak(new SpeechSynthesisUtterance(''
  try{AU.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';AU.play().then(()=>AU.pause()).catch(()=>{})}catch(e){}
  const s=document.getElementById('start');if(s)s.remove();
  try{wl=navigator.wakeLock&&navigator.wakeLock.request('screen');if(wl&&wl.catch)wl.catch(()=>{})}catch(e){}
- if(SR){wantListen=true;startRec();say('Je t’écoute. Dis Ultron, puis ta demande.')}else{say('La reconnaissance vocale n’est pas disponible sur ce navigateur. Utilise Safari ou Chrome, ou écris dans la barre.')}
+ if(SR){wantListen=true;startRec();say('Je suis là. Dis Ultron, puis ta demande.')}else{say('La reconnaissance vocale n’est pas disponible sur ce navigateur. Utilise Safari ou Chrome, ou écris dans la barre.')}
  vstat();if(withCam)handsStart()}
 mk();mk2();requestAnimationFrame(loop);
 $("#dt").textContent=new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
 render();
+/* ===== Connexions : cerveau, météo, calendrier, contacts, Spotify, voix naturelle ===== */
+let CFG={};try{CFG=JSON.parse(localStorage.getItem('ultron-cfg')||'{}')}catch(e){}
+const saveCfg=()=>{try{localStorage.setItem('ultron-cfg',JSON.stringify(CFG))}catch(e){}};
+if(!Array.isArray(S.ct))S.ct=[];
+NAMES.cfg='les réglages';
+/* --- Voix : file de phrases, voix française de qualité, démarrage immédiat --- */
+let VOICE=null;
+function pickVoice(){const v=(speechSynthesis.getVoices()||[]).filter(x=>/^fr/i.test(x.lang));if(!v.length)return;VOICE=v.find(x=>/premium|enhanced|améliorée/i.test(x.name))||v.find(x=>/thomas|amélie|audrey|aurélie|siri/i.test(x.name))||v.find(x=>/fr-FR/i.test(x.lang))||v[0]}
+try{pickVoice();speechSynthesis.onvoiceschanged=pickVoice}catch(e){}
+function speakQ(m){try{const u=new SpeechSynthesisUtterance(m);u.lang='fr-FR';if(VOICE)u.voice=VOICE;u.rate=1.07;u.pitch=.96;u.onstart=()=>{speakingUntil=Date.now()+60000};u.onend=u.onerror=()=>{if(!speechSynthesis.speaking&&!speechSynthesis.pending)speakingUntil=Date.now()+450};speechSynthesis.speak(u)}catch(e){}}
+say=function(m){m=String(m);const e=document.getElementById('sayt');if(e){e.textContent=m;clearTimeout(ct);ct=setTimeout(()=>{e.textContent=''},4000+m.length*70)}try{speechSynthesis.cancel()}catch(x){}speakingUntil=Date.now()+60000;speakQ(m)};
+/* --- Météo (Open-Meteo, sans clé) --- */
+const WMO=c=>c===0?'grand soleil':c<=2?'plutôt dégagé':c===3?'couvert':c<=48?'brumeux':c<=57?'bruine':c<=67?'pluvieux':c<=77?'neigeux':c<=82?'averses':c<=86?'neige':'orageux';
+let WX=null,WXt=0;
+function getPos(){return new Promise(r=>{const f=()=>r(CFG.pos||[48.85,2.35]);if(!navigator.geolocation)return f();navigator.geolocation.getCurrentPosition(p=>{CFG.pos=[+p.coords.latitude.toFixed(3),+p.coords.longitude.toFixed(3)];saveCfg();r(CFG.pos)},f,{timeout:6000,maximumAge:3600000})})}
+async function getWx(){if(WX&&Date.now()-WXt<1200000)return WX;try{const p=await getPos(),j=await (await fetch('https://api.open-meteo.com/v1/forecast?latitude='+p[0]+'&longitude='+p[1]+'&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&timezone=auto&forecast_days=2')).json();WX=j;WXt=Date.now();return j}catch(e){return null}}
+function wxText(j,dem){const c=j.current,d=j.daily,i=dem?1:0;if(dem)return'Demain : '+WMO(d.weather_code[1])+', entre '+Math.round(d.temperature_2m_min[1])+' et '+Math.round(d.temperature_2m_max[1])+' degrés, '+(d.precipitation_probability_max[1]>=40?'pluie probable ('+d.precipitation_probability_max[1]+' %).':'peu de risque de pluie.');return'Il fait '+Math.round(c.temperature_2m)+' degrés, ressenti '+Math.round(c.apparent_temperature)+', '+WMO(c.weather_code)+'. Aujourd’hui entre '+Math.round(d.temperature_2m_min[0])+' et '+Math.round(d.temperature_2m_max[0])+', '+(d.precipitation_probability_max[0]>=40?'prends un parapluie ('+d.precipitation_probability_max[0]+' % de pluie).':'pas de pluie à craindre.')}
+/* --- Contacts et appels --- */
+const cname=s=>S.ct.find(c=>N(c.n)===s)||S.ct.find(c=>N(c.n).includes(s)||s.includes(N(c.n)));
+/* --- Spotify (PKCE, sans serveur) --- */
+const RURI=location.origin+location.pathname;
+let SPT=null;try{SPT=JSON.parse(localStorage.getItem('ultron-sp')||'null')}catch(e){}
+const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+async function spLogin(){if(!CFG.spId)return say('Ajoute d’abord ton identifiant Spotify dans les réglages.');const v=b64u(crypto.getRandomValues(new Uint8Array(48)));localStorage.setItem('ultron-spv',v);const ch=b64u(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)));location.href='https://accounts.spotify.com/authorize?'+new URLSearchParams({client_id:CFG.spId,response_type:'code',redirect_uri:RURI,scope:'user-modify-playback-state user-read-playback-state',code_challenge_method:'S256',code_challenge:ch})}
+async function spTok(body){const r=await fetch('https://accounts.spotify.com/api/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:CFG.spId,...body})}),j=await r.json();if(!j.access_token)throw 0;SPT={at:j.access_token,rt:j.refresh_token||(SPT&&SPT.rt),exp:Date.now()+j.expires_in*1000-60000};localStorage.setItem('ultron-sp',JSON.stringify(SPT))}
+async function spOK(){if(!SPT)return false;if(Date.now()>SPT.exp){try{await spTok({grant_type:'refresh_token',refresh_token:SPT.rt})}catch(e){SPT=null;localStorage.removeItem('ultron-sp');return false}}return true}
+async function spApi(p,m,b){if(!await spOK())return null;return fetch('https://api.spotify.com/v1'+p,{method:m||'GET',headers:{Authorization:'Bearer '+SPT.at,'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined})}
+async function spPlay(q){const r=await spApi('/search?type=track&limit=1&q='+encodeURIComponent(q)),j=r&&r.ok?await r.json():null,t=j&&j.tracks&&j.tracks.items[0];if(!t)return say('Je n’ai rien trouvé pour '+q+' sur Spotify.');
+ let x=await spApi('/me/player/play','PUT',{uris:[t.uri]});
+ if(x&&x.status===404){const d=await (await spApi('/me/player/devices')).json(),dv=d.devices&&d.devices[0];if(!dv)return say('Ouvre l’appli Spotify une seconde sur ton téléphone, puis redemande-moi.');x=await spApi('/me/player/play?device_id='+dv.id,'PUT',{uris:[t.uri]})}
+ if(x&&x.status===403)return say('Spotify refuse : il faut un compte Premium pour que je le commande.');
+ say('C’est parti : '+t.name+', '+t.artists[0].name+'.')}
+async function spCtl(a){const m={pause:['/me/player/pause','PUT'],play:['/me/player/play','PUT'],next:['/me/player/next','POST'],prev:['/me/player/previous','POST']}[a];const x=await spApi(m[0],m[1]);say(x&&x.status<300?'D’accord.':'Spotify ne répond pas. Ouvre l’appli une seconde.')}
+(async()=>{const q=new URLSearchParams(location.search),c=q.get('code');if(c&&CFG.spId){try{await spTok({grant_type:'authorization_code',code:c,redirect_uri:RURI,code_verifier:localStorage.getItem('ultron-spv')});history.replaceState({},'',RURI);setTimeout(()=>say('Spotify est connecté.'),600)}catch(e){history.replaceState({},'',RURI)}}})();
+/* --- Importer calendrier (.ics) et contacts (.vcf) --- */
+function icsDate(v,p){const m=v.match(/^(\d{4})(\d\d)(\d\d)(?:T(\d\d)(\d\d)(\d\d)?(Z)?)?/);if(!m)return null;let d;if(m[7])d=new Date(Date.UTC(+m[1],m[2]-1,+m[3],+m[4],+m[5]));else d=new Date(+m[1],m[2]-1,+m[3],+(m[4]||0),+(m[5]||0));return{d:ds(d),t:m[4]?String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'):''}}
+async function importIcs(f){if(!f)return;const tx=(await f.text()).replace(/\r?\n[ \t]/g,''),ev=tx.split('BEGIN:VEVENT').slice(1);let n=0;const lo=Date.now()-7*864e5,hi=Date.now()+400*864e5;for(const e of ev){const g=k=>{const m=e.match(new RegExp('\\n'+k+'[^:\\n]*:([^\\n]*)'));return m?m[1].trim().replace(/\\,/g,',').replace(/\\n/g,' '):''},s=icsDate(g('DTSTART'));if(!s)continue;const dt=new Date(s.d+'T12:00:00').getTime();if(dt<lo||dt>hi)continue;const nm=g('SUMMARY')||'Événement';if(S.cal.some(x=>x.d===s.d&&x.t===s.t&&x.n===nm))continue;S.cal.push({id:Date.now()+n,d:s.d,t:s.t,n:nm});n++}save();render();say(n+' événement'+(n>1?'s':'')+' ajouté'+(n>1?'s':'')+' au calendrier.')}
+async function importVcf(f){if(!f)return;const tx=(await f.text()).replace(/\r?\n[ \t]/g,''),cs=tx.split('BEGIN:VCARD').slice(1);let n=0;for(const c of cs){const fn=(c.match(/\nFN[^:\n]*:([^\n\r]*)/)||[])[1],tel=(c.match(/\nTEL[^:\n]*:([^\n\r]*)/)||[])[1];if(fn&&tel&&!S.ct.some(x=>x.n===fn.trim())){S.ct.push({n:fn.trim(),p:tel.replace(/[^\d+]/g,'')});n++}}save();render();say(n+' contact'+(n>1?'s':'')+' importé'+(n>1?'s':'')+'.')}
+/* --- Page Réglages --- */
+V.cfg=()=>{const spok=!!SPT;return`<div class="pn"><h2>RÉGLAGES<span>connexions</span></h2>
+<p class="sm" style="color:var(--dm);line-height:1.5">Réponses libres, comme une vraie conversation : colle ta clé Claude ici. Elle reste uniquement sur ce téléphone.</p>
+<div class="row"><input id="cfk" type="password" placeholder="Clé Claude (sk-ant-…)" value="${CFG.key?'••••••••••••':''}" autocomplete="off"><button class="bt c" onclick="cfSaveKey()">OK</button></div>
+<h2 style="margin-top:22px">MÉTÉO<span>auto</span></h2><div class="row"><button class="bt" onclick="getPos().then(()=>{WX=null;say('Position mise à jour.')})">Utiliser ma position</button></div>
+<h2 style="margin-top:22px">CALENDRIER<span>${S.cal.length} évén.</span></h2><div class="row"><label class="bt" style="text-align:center">Importer un fichier .ics<input type="file" accept=".ics,text/calendar" hidden onchange="importIcs(this.files[0])"></label></div>
+<h2 style="margin-top:22px">CONTACTS<span>${S.ct.length}</span></h2><div class="row"><label class="bt" style="text-align:center">Importer un fichier .vcf<input type="file" accept=".vcf,text/vcard,text/x-vcard" multiple hidden onchange="[...this.files].forEach(importVcf)"></label></div>
+<p class="sm" style="color:var(--dm)">Ou dis : « ajoute le contact Maman 0612345678 ».</p>
+<h2 style="margin-top:22px">SPOTIFY<span>${spok?'connecté':'non connecté'}</span></h2>
+<div class="row"><input id="cfs" placeholder="Client ID Spotify" value="${esc(CFG.spId||'')}" autocomplete="off"><button class="bt c" onclick="CFG.spId=document.getElementById('cfs').value.trim();saveCfg();spLogin()">Connecter</button></div>
+<p class="sm" style="color:var(--dm);line-height:1.5;word-break:break-all">Adresse de redirection à saisir chez Spotify : ${esc(RURI)}</p></div>`};
+function cfSaveKey(){const v=document.getElementById('cfk').value.trim();if(v&&!v.startsWith('•')){CFG.key=v;saveCfg();say('Clé enregistrée. On peut discuter.')}}
+(function(){const b=document.createElement('button');b.id='cfgb';b.setAttribute('aria-label','Réglages');b.onclick=()=>goTo('cfg');b.style.cssText='position:fixed;right:max(62px,calc(env(safe-area-inset-right,0px) + 62px));bottom:calc(78px + env(safe-area-inset-bottom,0px));z-index:6;width:38px;height:38px;border-radius:50%;border:1px solid rgba(140,180,255,.35);background:rgba(10,20,50,.72);color:#8ab8ff;font-size:17px;cursor:pointer;padding:0';b.textContent='⚙';document.body.appendChild(b)})();
+/* --- Commandes locales avant le cerveau --- */
+const _cmd2=cmd;
+cmd=function(t){const s=N(t);
+ if(/\b(reglages?|parametres?|connexions?)\b/.test(s)){goTo('cfg');return say('Voici les réglages.')}
+ if(/\b(meteo|pleuvoir|pleut|parapluie|temperature)\b|il fait (chaud|froid|beau)|quel temps/.test(s)){getWx().then(j=>say(j?wxText(j,/demain/.test(s)):'Je n’arrive pas à joindre la météo.'));return}
+ let m=s.match(/(?:ajoute|ajouter|enregistre)[a-z ]*contact\s+(.+?)\s+((?:\+|0)[\d ]{8,})/);if(m){S.ct.push({n:t.match(new RegExp(m[1].replace(/\s+/g,'\\s+'),'i'))?.[0]||m[1],p:m[2].replace(/\s/g,'')});save();return say('Contact '+m[1]+' ajouté.')}
+ m=s.match(/\b(?:appelle|appeler|telephone a)\s+(.+)/);if(m){const c=cname(m[1].trim());if(!c)return say('Je ne trouve pas '+m[1]+' dans tes contacts.');say('J’appelle '+c.n+'.');setTimeout(()=>{location.href='tel:'+c.p},900);return}
+ m=s.match(/\b(?:envoie (?:un )?(?:message|sms)|ecris) a\s+([a-zà-ÿ ]+?)(?:\s+(?:que|qu|pour)\s+(.+))?$/);if(m){const c=cname(m[1].trim());if(!c)return say('Je ne trouve pas '+m[1]+' dans tes contacts.');const body=m[2]?t.slice(t.toLowerCase().indexOf(m[2])):'';say('Je prépare le message pour '+c.n+'.');setTimeout(()=>{location.href='sms:'+c.p+(body?'&body='+encodeURIComponent(body):'')},900);return}
+ m=s.match(/\bnumero de\s+(.+)/);if(m){const c=cname(m[1].trim());return say(c?c.n+' : '+c.p.replace(/(\d\d)(?=\d)/g,'$1 ')+'.':'Je ne trouve pas '+m[1]+'.')}
+ if(SPT){const loc=!AU.paused;
+  if(!loc&&/^\s*(pause|stop|arrete|mets? en pause)\b/.test(s))return void spCtl('pause');
+  if(!loc&&/^\s*(reprends?|continue|lecture)\b/.test(s))return void spCtl('play');
+  if(!loc&&/\b(suivant|passe|morceau suivant)\b/.test(s))return void spCtl('next');
+  if(!loc&&/\b(precedent|retour)\b/.test(s)&&/(musique|morceau|titre|precedent)/.test(s))return void spCtl('prev');
+  m=s.match(/\b(?:joue|jouer|mets|met|lance|ecouter|ecoute)\s+(?:moi\s+)?(?:du |de la |de l'|le titre |la chanson |la musique de |de |un morceau de )?(.+?)(?:\s+sur spotify)?$/);
+  if(m&&(/spotify/.test(s)||TR.length===0)&&!/\b(musique|ma musique|mes musiques|calendrier|budget|rappel)s?$/.test(m[1]))return void spPlay(m[1])}
+ _cmd2(t)};
+/* --- Cerveau : Claude en direct, la réponse est lue phrase par phrase --- */
+function ctxAll(){const now=new Date(),k=ds(now),k2=ds(new Date(now.getTime()+864e5)),ev=d=>S.cal.filter(e=>e.d===d).sort((a,b)=>(a.t||'').localeCompare(b.t||'')).map(e=>(e.t?e.t+' ':'')+e.n).join(', ')||'rien';let w='';if(WX){try{w=' Météo: '+wxText(WX)+' '+wxText(WX,1)}catch(e){}}
+ return'Maintenant: '+now.toLocaleString('fr-FR',{weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'})+'. Agenda aujourd’hui: '+ev(k)+'. Demain: '+ev(k2)+'.'+w+' Contacts: '+(S.ct.map(c=>c.n).join(', ')||'aucun')+'. '+ctxData()+(cur>=0&&!AU.paused?' Musique en cours: '+TR[cur].n+'.':'')}
+const RULES2="Tu es ULTRON, l’assistant personnel de l’utilisateur, comme un ami proche et brillant. Tutoie-le, parle naturellement, comme à l’oral: phrases courtes, un mot de réaction si c’est naturel, une à deux phrases, trois au maximum, ni liste, ni mise en forme, ni emoji. Réponds directement, sans te présenter. Ta réponse sera lue à voix haute. Tu as sous les yeux son agenda, la météo, ses contacts et ses données du jour. Tu ne modifies rien toi-même: pour agir, redis-lui la phrase à dire, par exemple « rappelle-moi dans 20 minutes de sortir le linge », « appelle Maman », « dépense 12 euros café », « mets Daft Punk sur Spotify », « ouvre le budget ».";
+let ABRT=null;
+ask=async function(t){if(!CFG.key)return say('Pour discuter librement, ajoute ta clé Claude dans les réglages. Dis : ouvre les réglages.');
+ if(ABRT)try{ABRT.abort()}catch(e){}ABRT=new AbortController();try{speechSynthesis.cancel()}catch(e){}speakingUntil=Date.now()+60000;
+ turns.push({role:'user',content:t});if(!WX)getWx();
+ try{const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:ABRT.signal,headers:{'content-type':'application/json','x-api-key':CFG.key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-haiku-5-5',max_tokens:220,stream:true,system:RULES2+'\n'+ctxAll(),messages:turns.slice(-10)})});
+  if(!r.ok){turns.pop();speakingUntil=0;return say(r.status===401?'Ta clé Claude n’est pas valide. Vérifie-la dans les réglages.':r.status===429?'Trop de demandes, réessaie dans un instant.':'Je n’arrive pas à joindre mon cerveau pour le moment.')}
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='',full='',pend='',first=true;
+  const flush=fin=>{let i;while((i=pend.search(/[.!?…]\s/))>=0){const p=pend.slice(0,i+1).trim();if(p)speakQ(p);pend=pend.slice(i+2)}if(fin&&pend.trim()){speakQ(pend.trim());pend=''}};
+  for(;;){const{done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});const ls=buf.split('\n');buf=ls.pop();for(const l of ls){if(!l.startsWith('data:'))continue;try{const j=JSON.parse(l.slice(5));if(j.type==='content_block_delta'&&j.delta&&j.delta.text){full+=j.delta.text;pend+=j.delta.text;const e=document.getElementById('sayt');if(e)e.textContent=full;flush(false)}}catch(x){}}}
+  flush(true);turns.push({role:'assistant',content:full});if(!speechSynthesis.speaking&&!speechSynthesis.pending)speakingUntil=Date.now()+300;const e=document.getElementById('sayt');if(e){clearTimeout(ct);ct=setTimeout(()=>{e.textContent=''},4000+full.length*70)}}
+ catch(e){if(e&&e.name==='AbortError')return;turns.pop();speakingUntil=0;say('Je n’arrive pas à joindre mon cerveau. Vérifie ta connexion.')}};
 </script></body></html>
